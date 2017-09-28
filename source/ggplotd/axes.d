@@ -13,11 +13,18 @@ Struct holding details on axis
 struct Axis
 {
     /// Creating axis giving a minimum and maximum value
-    this(double newmin, double newmax)
+    this(double min, double max)
     {
-        min = newmin;
-        max = newmax;
+        this.min = min;
+        this.max = max;
         min_tick = min;
+    }
+    this(double min, double max, double minTick, double tickWidth)
+    {
+        this.min = min;
+        this.max = max;
+        min_tick = minTick;
+        tick_width = tickWidth;
     }
 
     /// Label of the axis
@@ -85,9 +92,10 @@ Axis adjustTickWidth(Axis axis, size_t approx_no_ticks)
     assert( initialized(axis), "Axis range has not been set" );
 
     auto axis_width = axis.max - axis.min;
+    auto epsilon = axis_width*10e-5;
     auto scale = cast(int) floor(log10(axis_width));
     auto acceptables = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]; // Only accept ticks of these sizes
-    auto approx_width = pow(10.0, -scale) * (axis_width) / approx_no_ticks;
+    auto approx_width = pow(10.0, -scale) * axis_width / approx_no_ticks;
     // Find closest acceptable value
     double best = acceptables[0];
     double diff = abs(approx_width - best);
@@ -109,7 +117,8 @@ Axis adjustTickWidth(Axis axis, size_t approx_no_ticks)
     axis.min_tick = ceil(axis.min * pow(10.0, -scale)) * pow(10.0, scale);
     //debug writeln( "Here 120 ", axis.min_tick, " ", axis.min, " ", 
     //		axis.max,	" ", axis.tick_width, " ", scale );
-    while (axis.min_tick - axis.tick_width > axis.min)
+
+    while (axis.min_tick - axis.tick_width > axis.min - epsilon)
         axis.min_tick -= axis.tick_width;
     return axis;
 }
@@ -146,7 +155,7 @@ private struct Ticks
         // wrong label, i.e. 0 + small numerical error (of 5.5e-17) is 
         // displayed as 5.5e-17, while any other numerical error falls 
         // away in rounding
-        if (abs(currentPosition - 0) < axis.tick_width/1.0e5)
+        if (abs(currentPosition - 0) < axis.tick_width*1.0e-5)
             return 0.0;
         return currentPosition;
     }
@@ -167,7 +176,40 @@ private struct Ticks
     }
 }
 
-/// Returns a range starting at axis.min, ending axis.max and with
+private struct axisTicksOnly
+{
+    double currentPosition;
+    Axis axis;
+
+    this(Axis axis) {
+        currentPosition = axis.min_tick;
+        this.axis = axis;
+    }
+
+    @property double front()
+    {
+        import std.math : abs;
+        // Special case for zero, because a small numerical error results in
+        // wrong label, i.e. 0 + small numerical error (of 5.5e-17) is 
+        // displayed as 5.5e-17, while any other numerical error falls 
+        // away in rounding
+        if (abs(currentPosition - 0) < axis.tick_width*1.0e-5)
+            return 0.0;
+        return currentPosition;
+    }
+
+    void popFront()
+    {
+        currentPosition += axis.tick_width;
+    }
+
+    @property bool empty()
+    {
+        return currentPosition > axis.max + axis.tick_width*1.0e-5;
+    }
+}
+
+//Returns a range starting at axis.min, ending axis.max and with
 /// all the tick locations in between
 auto axisTicks(Axis axis)
 {
@@ -252,6 +294,21 @@ unittest
     assertEqual(tickLength(10.0, 100, 1, 0.5), tickLength(10.0, 100, 0.5, 1));
     assertEqual(tickLength(10.0, 100, 1, 0.5), 2.0*tickLength(5.0, 100, 0.5, 1));
 }
+
+auto autoAxisTicksAndLabels(double minAxis, double maxAxis, double scaling = 1) {
+    import std.typecons : tuple;
+    import std.math : round;
+    import std.conv : to;
+    import std.algorithm : map;
+    import std.range : array;
+
+    return Axis( minAxis, maxAxis )
+        .adjustTickWidth( (6.0*scaling).round.to!size_t )
+        .axisTicksOnly
+        .map!( t => tuple!(double,string)(t, t.to!double.toAxisLabel) )
+        .array;
+}
+
 
 /// Aes describing the axis and its tick locations
 auto axisAes(string type, double minC, double maxC, double lvl, double scaling = 1, Tuple!(double, string)[] ticks = [])
@@ -418,4 +475,39 @@ mixin( xy( q{auto axisShow( bool show )
     AxisFunction func = ( Axis axis ) { axis.show = show; return axis; }; 
     return func;
 }} ) );
+
+
+
+/// Aes describing the tick locations and names of an axis
+auto ticksAes(Tuple!(double, string)[] ticks, string type, double lvl, double scaling = 1)
+{
+    import std.algorithm : sort, uniq, map;
+    import std.conv : to;
+    import std.range : array,empty, repeat, take, popFront, walkLength;
+
+    import ggplotd.aes : aes;
+
+/*     double[] ticksLoc;
+    auto sortedAxisTicks = ticks.sort.uniq;
+
+    string[] labels; */
+
+    switch (type){
+        case "x":
+            enum horizontal = 0.0;
+            return ticks
+                .map!( a => aes!("x", "y", "label", "angle",    "size")
+                                (a[0],lvl, a[1],    horizontal, scaling) )
+                .array;
+        case "y":
+            import std.math : PI; 
+            enum vertical = (-0.5 * PI).to!double;
+            return ticks
+                .map!( a => aes!("x", "y",  "label", "angle",  "size")
+                                (lvl, a[0], a[1],    vertical, scaling) )
+                .array;
+        default:
+            assert(0, "axis type can only be x or y");
+    }
+}
 

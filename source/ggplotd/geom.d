@@ -114,11 +114,12 @@ private template geomShape( string shape, const(double[]) dash, AES )
                     return context;
                 context.save();
                 context.translate(x, y);
+
                 static if(dash != []) {
-                    import std.conv;
                     double[dash.length] sizedDash = dash*flags.size;
                     context.setDash(sizedDash, 0.0);
                 }
+
                 import ggplotd.aes : hasAesField;
                 static if (hasAesField!(typeof(tup), "sizeStore")) {
                     auto width = tup.width*sFunc(tup.sizeStore);
@@ -148,7 +149,6 @@ private template geomShape( string shape, const(double[]) dash, AES )
                     } else {
                         context.scale( width, height );
                     }
-
                     static if (shape=="triangle") 
                     {
                         context.moveTo( -0.5, -0.5 );
@@ -172,7 +172,8 @@ private template geomShape( string shape, const(double[]) dash, AES )
                         context.lineTo(  0.5,  0.0 );
                         context.moveTo(  0.0, -0.5 );
                         context.lineTo(  0.0,  0.5 );
-                    } else {
+                    } else static if (shape =="" || shape=="square" )
+                    {
                         context.moveTo( -0.5, -0.5 );
                         context.lineTo( -0.5,  0.5 );
                         context.lineTo(  0.5,  0.5 );
@@ -222,6 +223,13 @@ private template geomShape( string shape, const(double[]) dash, AES )
         return VolderMort(aes);
     }
 }
+enum geomShapes : string {
+    Cross    = "cross", 
+    Diamond  = "diamond",
+    Ellipse  = "ellipse",
+    Plus     = "plus",
+    Square   = "square",
+    Triangle = "triangle" };
 
 auto geomShape( string shape, AES ) (AES aes) {
     return geomShape!(shape, [])(aes);
@@ -376,7 +384,7 @@ auto geomPlus(AES)(AES aes)
 }
 
 /// Create points from the data
-auto geomPoint(AES)(AES aesRange)
+auto geomPoint(string shape, AES)(AES aesRange)
 {
     import std.algorithm : map;
     import ggplotd.aes : aes, Pixel;
@@ -385,9 +393,11 @@ auto geomPoint(AES)(AES aesRange)
         .mergeRange(aesRange)
         .map!((a) => a.merge(aes!("sizeStore", "width", "height", "fill")
             (a.size, Pixel(8), Pixel(8), a.alpha)))
-        .geomEllipse;
+        .geomShape!shape;
 }
-
+auto geomPoint(AES)(AES aesRange) {
+    return aesRange.geomPoint!"ellipse";
+}
 ///
 unittest
 {
@@ -428,8 +438,7 @@ template geomLine(const(double[]) dash, AES)
                 auto coords = coordsZip.save;
                 auto fr = coords.front;
 
-                static if(dash != []){
-                    import std.conv;
+                static if(dash != []) {
                     double[dash.length] sizedDash = dash*flags.size;
                     context.setDash(sizedDash, 0.0);
                 }
@@ -1113,4 +1122,175 @@ auto geomDensity2D(AES)(AES aes)
 
     return statDensity2D( aes )
             .map!( (poly) => geomPolygon( poly ) ).joiner;
+}
+
+
+/**
+    Draw grid along the ticks of both axes.
+    Uses data originally created for geomAxis().
+    width and heigth define grid line lengths.
+    Params:
+        aesAxisX: x axis data 
+        aesAxisY: y axis data
+        width: width of the plot
+        height: height of the plot
+*/
+auto geomGrid(AES)(AES aesAxisX, AES aesAxisY, double width, double height)
+{
+    double[] xs;
+    double[] ys;
+    enum newSubPath = double.nan;
+
+    // first data is originally marking the start of the axis
+    // which we don't want to use for grid drawing
+    if (!aesAxisX.empty) aesAxisX.popFront; 
+    while (!aesAxisX.empty)
+    {
+        auto tick = aesAxisX.front;
+        aesAxisX.popFront;
+
+        // Draw line perpendicular to x-axis;
+        if (!aesAxisX.empty)
+        {
+            xs ~= [tick.x, tick.x,          newSubPath];
+            ys ~= [tick.y, tick.y + height, newSubPath];
+        }
+    }
+
+    if (!aesAxisY.empty) aesAxisY.popFront;
+    while (!aesAxisY.empty)
+    {
+        auto tick = aesAxisY.front;
+        aesAxisY.popFront;
+
+         // Draw line perpendicular to y-axis;
+        if (!aesAxisY.empty)
+        {
+            xs ~= [tick.x, tick.x + width, newSubPath];
+            ys ~= [tick.y, tick.y,         newSubPath];
+        }
+    }
+
+    import std.algorithm : map;
+    import std.range : zip;
+    import ggplotd.range : mergeRange;
+    return xs.zip(ys)
+        .map!( (a) => aes!("x", "y","mask", "scale", "size")
+                        (a[0], a[1], false, false, 0.5) )
+        .geomDottedLine;
+}
+
+auto geomCoordinateSystem2D(AES)(AES aesAxis, AES aesTicksX, AES aesTicksY, 
+        Bounds bounds, double tickLengthX, double tickLengthY, 
+        string labelX, string labelY, 
+        bool showGrid = true, bool showBorder = true)
+{
+    import std.algorithm : find;
+    double[] xsGrid;
+    double[] ysGrid;
+
+    double[] xs;
+    double[] ys;
+
+    double[] lxs;
+    double[] lys;
+    double[] langles;
+    string[] lbls;
+
+    auto width  = bounds.max_x - bounds.min_x;
+    auto height = bounds.max_y - bounds.min_y;
+    
+    auto size = aesAxis.front.size;
+    enum newSubPath = double.nan;
+    
+    foreach (tick; aesTicksX)
+    {
+        ys ~= [tick.y , tick.y + tickLengthX, newSubPath];
+        xs ~= [tick.x , tick.x,               newSubPath];
+
+        if(showBorder) {
+        xs ~= [tick.x,           tick.x,               newSubPath];
+        ys ~= [tick.y + height , tick.y + height - tickLengthX, newSubPath];
+        }
+
+        lxs ~= tick.x;
+        lys ~= tick.y - 1.3*tickLengthX;
+        langles ~= tick.angle;
+        lbls ~= tick.label;
+
+        if(showGrid) {
+            xsGrid ~= [tick.x, tick.x,          newSubPath];
+            ysGrid ~= [tick.y, tick.y + height, newSubPath];
+        }
+    }
+    foreach (tick; aesTicksY)
+    {
+        xs ~= [tick.x , tick.x + tickLengthY, newSubPath];
+        ys ~= [tick.y , tick.y,               newSubPath];
+
+        if(showBorder) {
+        xs ~= [tick.x + width, tick.x + width - tickLengthY, newSubPath];
+        ys ~= [tick.y,         tick.y,                       newSubPath];
+        }
+
+        lxs ~= tick.x - 1.3*tickLengthY;
+        lys ~= tick.y;
+        langles ~= tick.angle;
+        lbls ~= tick.label;
+
+        if(showGrid) {
+            xsGrid ~= [tick.x, tick.x + width, newSubPath];
+            ysGrid ~= [tick.y, tick.y,         newSubPath];
+        }
+    }
+
+    auto xyBorder = 
+        [   [bounds.max_x, bounds.min_y], 
+            [bounds.min_x, bounds.min_y],
+            [bounds.min_x, bounds.max_y] ];
+    if(showBorder)
+        xyBorder ~= 
+        [   [bounds.max_x, bounds.max_y], 
+            [bounds.max_x, bounds.min_y] ];
+
+
+    import std.algorithm : map;
+    import std.range : chain, zip;
+    import ggplotd.range : mergeRange;
+
+    auto ticks = xs.zip(ys)
+        .map!((a) => aes!("x", "y", "mask", "scale",) (a[0], a[1], false, false))
+        .geomLine;
+
+    auto border = xyBorder
+        .map!((a) => aes!("x", "y", "mask", "scale",) (a[0], a[1], false, false))
+        .geomLine;
+
+    auto tickLabels = lxs.zip(lys, lbls, langles)
+        .map!((a) => 
+            aes!("x", "y", "label", "angle", "mask", "size", "scale")
+                (a[0], a[1], a[2], a[3], false, size, false ))
+        .geomLabel;
+
+    auto grid = xsGrid.zip(ysGrid)
+        .map!( (a) => aes!("x", "y","mask", "scale", "size")
+                        (a[0], a[1], false, false, size*0.33) )
+        .geomDashedLine;
+
+    // Main label
+    auto xm = [ bounds.min_x - 3.5*tickLengthY, 
+                bounds.min_x + width *0.5 ];
+    auto ym = [ bounds.min_y + height*0.5,
+                bounds.min_y - 3.5*tickLengthX];
+
+    import std.math : PI; 
+    import std.conv : to;
+    enum ver = (-0.5 *PI).to!double;
+    enum hor = 0.0;
+    auto mainLabels = Aes!(double[], "x", double[], "y", string[], "label", 
+        double[], "angle", bool[], "mask", bool[], "scale")
+        ( xm, ym, [labelX, labelY], [ver, hor], [false,false], [false,false])
+        .geomLabel;
+
+    return chain(  grid, ticks, border, tickLabels, mainLabels);
 }

@@ -18,7 +18,7 @@ unittest
     import std.typecons : Tuple;
     import ggplotd.stat : statFunction;
     import ggplotd.ggplotd : GGPlotD;
-    import ggplotd.geom : geomDashedLine, geomPoint;
+    import ggplotd.geom : geomDashedLine, geomPoint, geomShapes;
     import ggplotd.range : mergeRange;
 
     auto f = (double x) { return x / (1 + x); };
@@ -31,8 +31,8 @@ unittest
     auto aes2 = f2.statFunction(0.0, 10, 25);
 
     // Show points in different colour
-    auto withColour = Tuple!(string, "colour")("aquamarine").mergeRange(aes2);
-    gg = gg.put(withColour.geomPoint);
+    auto withColour = Tuple!(string, "colour")("darkGreen").mergeRange(aes2);
+    gg = gg.put(withColour.geomPoint!"cross");
 
     gg.save("function.png");
 }

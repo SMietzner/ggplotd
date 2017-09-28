@@ -257,97 +257,78 @@ struct GGPlotD
         foreach (scale; scaleFunctions)
             scale.applyScaleFunction(xFunc, yFunc, cFunc, sFunc);
 
+        auto xScale = defaultScaling(width, height);
+        auto yScale = defaultScaling(height, width);
+
         AdaptiveBounds bounds;
         bounds = bounds.applyScale(xFunc, xStore, yFunc, yStore);
 
-        import std.algorithm : map;
-        import std.array : array;
-        import std.typecons : tuple;
-        if (xStore.hasDiscrete)
-            xAxisTicks = xStore
-                .storeHash
-                .byKeyValue()
-                .map!((kv) => tuple(xFunc(kv.value), kv.key))
-                .array;
-        if (yStore.hasDiscrete)
-            yAxisTicks = yStore
-                .storeHash
-                .byKeyValue()
-                .map!((kv) => tuple(yFunc(kv.value), kv.key))
-                .array;
-
-        // Axis
-        import std.algorithm : sort, uniq, min, max;
-        import std.range : chain;
-        import std.array : array;
-
-        import ggplotd.axes : initialized, axisAes;
-
-        // TODO move this out of here and add some tests
-        // If ticks are provided then we make sure the bounds include them
-        auto xSortedTicks = xAxisTicks.sort().uniq.array;
-        if (!xSortedTicks.empty)
-        {
-            bounds.min_x = min( bounds.min_x, xSortedTicks[0][0] );
-            bounds.max_x = max( bounds.max_x, xSortedTicks[$-1][0] );
-        }
-        if (initialized(xaxis))
+        import ggplotd.axes : initialized;
+        if (xaxis.initialized)
         {
             bounds.min_x = xaxis.min;
             bounds.max_x = xaxis.max;
         }
-
-        // This needs to happen before the offset of x axis is set
-        auto ySortedTicks = yAxisTicks.sort().uniq.array;
-        if (!ySortedTicks.empty)
-        {
-            bounds.min_y = min( bounds.min_y, ySortedTicks[0][0] );
-            bounds.max_y = max( bounds.max_y, ySortedTicks[$-1][0] );
-        }
-        if (initialized(yaxis))
+        if (yaxis.initialized)
         {
             bounds.min_y = yaxis.min;
             bounds.max_y = yaxis.max;
         }
 
+
+        // Get axis ticks
+        // either from hashed information (see: Boxplot example)
+        // or generated from data (general case)
+        auto tryGetAxisTicks(GS, GF)(GS store, GF gf) {
+            import std.algorithm : map;
+            import std.array : array;
+            import std.typecons : tuple;
+            
+            return store.hasDiscrete ?
+                store.storeHash
+                    .byKeyValue
+                    .map!( kv => tuple(gf(kv.value), kv.key))
+                    .array : [];
+        }
+
+        xAxisTicks = tryGetAxisTicks(xStore, xFunc);
+        yAxisTicks = tryGetAxisTicks(yStore, yFunc);
+
         import std.math : isNaN;
-        auto offset = bounds.min_y;
-        if (!isNaN(xaxis.offset))
-            offset = xaxis.offset;
-        if (!xaxis.show) // Trixk to draw the axis off screen if it is hidden
-            offset = yaxis.min - bounds.height;
+        import ggplotd.axes : autoAxisTicksAndLabels;
+        import ggplotd.axes : ticksAes;
+        if(xAxisTicks.empty)
+            xAxisTicks = 
+                autoAxisTicksAndLabels(bounds.min_x, bounds.max_x, xScale);
+        if(yAxisTicks.empty)
+            yAxisTicks =
+                autoAxisTicksAndLabels(bounds.min_y, bounds.max_y, yScale);
+        assert(!xAxisTicks.empty && !yAxisTicks.empty, "AxisTicks empty!");
 
-        // TODO: Should really take separate scaling for number of ticks (defaultScaling(width)) 
-        // and for font: defaultScaling(widht, height)
-        auto aesX = axisAes("x", bounds.min_x, bounds.max_x, offset, defaultScaling(width, height),
-            xSortedTicks );
+        auto offsetX = xaxis.offset.isNaN ? bounds.min_y : xaxis.offset;
+        auto offsetY = yaxis.offset.isNaN ? bounds.min_x : yaxis.offset;
 
-        offset = bounds.min_x;
-        if (!isNaN(yaxis.offset))
-            offset = yaxis.offset;
-        if (!yaxis.show) // Trixk to draw the axis off screen if it is hidden
-            offset = xaxis.min - bounds.width;
-        auto aesY = axisAes("y", bounds.min_y, bounds.max_y, offset, defaultScaling(height, width),
-            ySortedTicks );
+        auto aesTicksX = xAxisTicks.ticksAes("x", offsetX, xScale );
+        auto aesTicksY = yAxisTicks.ticksAes("y", offsetY, yScale );
 
-        import ggplotd.geom : geomAxis;
+        import ggplotd.geom : geomCoordinateSystem2D;
         import ggplotd.axes : tickLength;
 
         auto currentMargins = margins(width, height);
+        auto tickLenX = bounds.height.tickLength(height - currentMargins.bottom - currentMargins.top, 
+                        defaultScaling(width), defaultScaling(height));
+        auto tickLenY = bounds.width.tickLength(width - currentMargins.left - currentMargins.right, 
+                        defaultScaling(width), defaultScaling(height));
 
-        auto gR = chain(
-                geomAxis(aesX, 
-                    bounds.height.tickLength(height - currentMargins.bottom - currentMargins.top, 
-                        defaultScaling(width), defaultScaling(height)), xaxis.label), 
-                geomAxis(aesY, 
-                    bounds.width.tickLength(width - currentMargins.left - currentMargins.right, 
-                        defaultScaling(width), defaultScaling(height)), yaxis.label), 
-            );
+        auto coordSys = geomCoordinateSystem2D(aesTicksX, aesTicksX, aesTicksY, 
+            bounds.bounds, tickLenX, tickLenY, xaxis.label, yaxis.label );
+
         auto plotMargins = Margins(currentMargins);
         if (!legends.empty)
             plotMargins.right += legends[0].width;
  
-        foreach (geom; chain(geomRange.data, gR) )
+        import std.range : chain;
+        foreach (geom; chain(geomRange.data, coordSys) )
         {
             surface = geom.drawGeom( surface,
                 xFunc, yFunc, cFunc, sFunc,
